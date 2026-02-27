@@ -72,17 +72,43 @@ class DeepSeekService:
         return outputs[0].outputs[0].text
 
     def _process_hf(self, image: Image.Image, prompt: str) -> str:
+        import tempfile
+        import os
         try:
-            inputs = self.processor(text=prompt, images=image, return_tensors="pt").to(self.model.device)
+            # The DeepSeek-VL `model.infer` method specifically expects a file path 
+            # for the `image_file` parameter based on their native pipeline.
+            with tempfile.NamedTemporaryFile(suffix=".png", delete=False) as tmp_img:
+                image.save(tmp_img.name)
+                temp_path = tmp_img.name
             
-            with torch.no_grad():
-                generated_ids = self.model.generate(**inputs, max_new_tokens=4096)
+            try:
+                res = self.model.infer(
+                    self.tokenizer,
+                    prompt=prompt,
+                    image_file=temp_path,
+                    output_path=".", # Model may save intermediate visualizations here
+                    base_size=1280,
+                    image_size=1280,
+                    crop_mode=False,
+                    save_results=False, # We don't need to save the result dict to disk
+                    test_compress=True,
+                    eval_mode=True 
+                )
                 
-            output_text = self.processor.decode(
-                generated_ids[0][inputs["input_ids"].shape[1]:], 
-                skip_special_tokens=True
-            )
-            return output_text
+                # The returned format is usually a string directly, or a dict containing 'text'
+                if isinstance(res, dict) and "text" in res:
+                    output_text = res["text"]
+                elif isinstance(res, str):
+                    output_text = res
+                else:
+                    # Fallback if structure is unknown
+                    output_text = str(res)
+                    
+                return output_text
+            finally:
+                if os.path.exists(temp_path):
+                    os.remove(temp_path)
+                    
         except Exception as e:
             raise RuntimeError(f"Failed to process DeepSeek HF inference: {str(e)}")
 
@@ -97,25 +123,37 @@ class DeepSeekService:
             markdown_output = self._process_hf(image, prompt_1)
             
         # Step 2: Extract images based on grounding boxes and parse them
-        # Search for typical box format like [ymin, xmin, ymax, xmax] (normalized to 1000)
-        # We will parse out the coordinates, crop the image, and run the second prompt
+        # Search for exact Box Det format mapped specifically to 'image' references.
+        # User output example: <|ref|>image<|/ref|><|det|>[[214, 9, 250, 60]]<|/det|>
+        # Text block example: <|ref|>text<|/ref|><|det|>[[264, 26, 343, 60]]<|/det|>
+        # We only want to run Deep Parsing on the 'image' or 'figure' blocks.
+        
         prompt_2 = "<image>\nParse the figure."
         
-        # Assuming DeepSeek outputs boxes in the format: [[ymin, xmin, ymax, xmax]] 
-        # or <|box_2d|> [ymin, xmin, ymax, xmax] </|box_2d|>
-        # Let's write a generic regex for arrays of 4 numbers
-        box_pattern = r'\[\s*(\d{1,4})\s*,\s*(\d{1,4})\s*,\s*(\d{1,4})\s*,\s*(\d{1,4})\s*\]'
+        # Regex to capture the type (image/text) and the coordinates map
+        # Group 1: type (e.g. image, text, figure)
+        # Group 2-5: ymin, xmin, ymax, xmax
+        box_pattern = r'<\|ref\|>(.*?)<\|/ref\|>\s*<\|det\|>\s*\[\[\s*(\d{1,4})\s*,\s*(\d{1,4})\s*,\s*(\d{1,4})\s*,\s*(\d{1,4})\s*\]\]\s*<\|/det\|>'
         matches = re.finditer(box_pattern, markdown_output)
         
         width, height = image.size
         final_output = markdown_output + "\n\n--- Deep Parsing Extractions ---\n"
         
         found_crops = False
-        for i, match in enumerate(matches):
-            found_crops = True
-            ymin, xmin, ymax, xmax = map(int, match.groups())
+        parsed_count = 0
+        
+        for match in matches:
+            ref_type = match.group(1).strip().lower()
             
-            # Un-normalize coordinates from [0, 1000] scale to absolute pixel values
+            # Only perform secondary visual parsing on actual images/figures
+            if ref_type not in ["image", "figure", "chart", "table"]:
+                continue
+                
+            found_crops = True
+            parsed_count += 1
+            xmin, ymin, xmax, ymax = map(int, match.group(2, 3, 4, 5))
+            
+            # DeepSeek uses a 1000x1000 normalized coordinate system
             abs_xmin = int((xmin / 1000.0) * width)
             abs_ymin = int((ymin / 1000.0) * height)
             abs_xmax = int((xmax / 1000.0) * width)
@@ -130,10 +168,10 @@ class DeepSeekService:
                 else:
                     crop_text = self._process_hf(crop, prompt_2)
                     
-                final_output += f"\n### Figure {i+1} Parameters [{ymin}, {xmin}, {ymax}, {xmax}]:\n{crop_text}\n"
+                final_output += f"\n### Parsed Figure {parsed_count} (Type: {ref_type}) [{xmin}, {ymin}, {xmax}, {ymax}]:\n{crop_text}\n"
         
         if not found_crops:
-            final_output += "\nNo figures found for deep parsing."
+            final_output += "\nNo visual figures/images found in the document that required secondary deep parsing."
             
         return final_output
 
