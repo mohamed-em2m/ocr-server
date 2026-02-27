@@ -9,3 +9,4 @@ uvicorn
 python-multipart
 pydantic-settings
 pydantic
+psutil

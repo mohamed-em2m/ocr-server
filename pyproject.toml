@@ -15,17 +15,13 @@ dependencies = [
     "addict",
     "tokenizers",
     "einops",
-    "easydict"
+    "easydict",
+    "psutil",
 ]
 
 [project.optional-dependencies]
-vllm = [
-    "vllm"
-]
-huggingface = [
-    "transformers",
-    "bitsandbytes"
-]
+vllm = ["vllm"]
+huggingface = ["transformers", "bitsandbytes"]
 
 [build-system]
 requires = ["setuptools>=61.0"]

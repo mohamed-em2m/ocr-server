@@ -1,17 +1,23 @@
 import io
 import base64
+import asyncio
 from fastapi import APIRouter, File, UploadFile, Form, HTTPException
 from PIL import Image
 
 from app.schemas.ocr import OCRResponse, Base64OCRRequest
 from app.services.deepseek_service import deepseek_service
+from app.core.config import settings
 
 router = APIRouter()
+
+# Limit concurrent requests based on hardware calculation
+# to prevent GPU OOM on HF backend or utilize vLLM max parallel
+inference_lock = asyncio.Semaphore(settings.CONCURRENCY_LIMIT)
 
 @router.post("/recognize/file", response_model=OCRResponse)
 async def recognize_file(
     file: UploadFile = File(...),
-    prompt_type: str = Form("ocr", description="Type of prompt: ocr, markdown, free, figure, describe")
+    prompt_type: str = Form("ocr", description="Type of prompt: ocr, markdown, free, figure, describe, deep_parsing")
 ):
     if not file.content_type.startswith("image/"):
         raise HTTPException(status_code=400, detail="File provided is not an image.")
@@ -22,7 +28,8 @@ async def recognize_file(
         
         # In a real async environment you might want to run this in a threadpool
         # since model generation is a blocking CPU/GPU operation.
-        text = deepseek_service.process_image(image, prompt_type)
+        async with inference_lock:
+            text = deepseek_service.process_image(image, prompt_type)
         
         return OCRResponse(
             text=text,
@@ -46,7 +53,8 @@ async def recognize_base64(request: Base64OCRRequest):
         image_data = base64.b64decode(base64_image)
         image = Image.open(io.BytesIO(image_data)).convert("RGB")
         
-        text = deepseek_service.process_image(image, request.prompt_type)
+        async with inference_lock:
+            text = deepseek_service.process_image(image, request.prompt_type)
         
         return OCRResponse(
             text=text,
