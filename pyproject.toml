@@ -1,0 +1,32 @@
+[project]
+name = "ocr-fastapi-service"
+version = "0.1.0"
+description = "FastAPI OCR service with GLM and DeepSeek"
+dependencies = [
+    "fastapi",
+    "uvicorn",
+    "python-multipart",
+    "pydantic",
+    "pydantic-settings",
+    "torch",
+    "transformers",
+    "pillow",
+    "bitsandbytes",
+    "addict",
+    "tokenizers",
+    "einops",
+    "easydict"
+]
+
+[project.optional-dependencies]
+vllm = [
+    "vllm"
+]
+huggingface = [
+    "transformers",
+    "bitsandbytes"
+]
+
+[build-system]
+requires = ["setuptools>=61.0"]
+build-backend = "setuptools.build_meta"

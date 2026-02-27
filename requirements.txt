@@ -1,0 +1,11 @@
+bitsandbytes
+addict
+transformers
+tokenizers
+einops
+easydict
+fastapi
+uvicorn
+python-multipart
+pydantic-settings
+pydantic
